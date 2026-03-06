@@ -8,21 +8,21 @@
 #include <webots/Motor.hpp>
 #include <webots/PositionSensor.hpp>
 #include <webots/DistanceSensor.hpp>
+#include <webots/Camera.hpp> // <- Añadimos la librería de la cámara
 
 using namespace std;
 using namespace webots;
 
 // ── Constantes Físicas y de Navegación ────────────────────────────────────────
-#define MAX_SPEED               7.0
+#define MAX_SPEED               5.0
 #define WHEELS_DISTANCE         0.3606
 #define WHEEL_RADIUS            0.0825
 #define ENCODER_TICS_PER_RADIAN 1.0
 
 #define OBSTACLE_DIST_THRESHOLD 150.0 
-#define GOAL_X                  19.0  
+#define GOAL_X                  16.0  
 #define GOAL_Y                  0.0   
 
-// ── Estructuras de Datos ──────────────────────────────────────────────────────
 struct Point {
     float x;
     float y;
@@ -33,6 +33,7 @@ typedef enum {
     ALIGN_TO_GOAL,
     GO_TO_GOAL,
     FOLLOW_WALL,
+    VICTIM_DETECTED, // <- Nuevo estado para cuando veamos el verde
     DONE
 } State;
 
@@ -47,7 +48,7 @@ private:
     int    _time_step;
     double _left_speed, _right_speed;
 
-    // Localización (Solo Odometría)
+    // Localización
     float  _x, _y, _theta;
     float  _sr, _sl;
     
@@ -69,6 +70,7 @@ private:
     DistanceSensor *_ds_front;
     DistanceSensor *_ds_left;           
     DistanceSensor *_ds_right;
+    Camera         *_front_camera; // <- Dispositivo de cámara
 
     // Métodos internos
     void   compute_odometry();
@@ -76,6 +78,7 @@ private:
     void   update_state();
     float  get_distance_to_goal(float current_x, float current_y);
     void   save_waypoint();
+    bool   look_for_green_person(); // <- Nueva función de visión
 };
 
 #endif /* MY_ROBOT_H_ */

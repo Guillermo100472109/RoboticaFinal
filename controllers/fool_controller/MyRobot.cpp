@@ -41,6 +41,10 @@ MyRobot::MyRobot() : Robot() {
     _ds_front->enable(_time_step);
     _ds_left->enable(_time_step);
     _ds_right->enable(_time_step);
+
+    // Cámara (Asegúrate de que el nombre coincide con el del árbol de Webots)
+    _front_camera = getCamera("camera_f"); 
+    _front_camera->enable(_time_step);
 }
 
 MyRobot::~MyRobot() {
@@ -50,7 +54,7 @@ MyRobot::~MyRobot() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 void MyRobot::run() {
-    cout << "Misión Iniciada (Modo Reactivo Simple). Meta -> x: " << _goal_pos.x << "  y: " << _goal_pos.y << endl;
+    cout << "Buscando víctimas verdes. Meta de exploración -> x: " << _goal_pos.x << " y: " << _goal_pos.y << endl;
 
     Point p = {_x, _y};
     _waypoints.push_back(p);
@@ -64,12 +68,62 @@ void MyRobot::run() {
 
         save_waypoint(); 
         
-        if (_state == DONE) break;
+        if (_state == DONE || _state == VICTIM_DETECTED) {
+            // Detenemos los motores si llegamos a la meta o vemos a alguien
+            _left_wheel_motor->setVelocity(0.0);
+            _right_wheel_motor->setVelocity(0.0);
+            if (_state == DONE) break; 
+        }
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Visión Artificial: Detección de color verde
+// ─────────────────────────────────────────────────────────────────────────────
+bool MyRobot::look_for_green_person() {
+    const unsigned char *image = _front_camera->getImage();
+    if (!image) return false;
+
+    int width = _front_camera->getWidth();
+    int height = _front_camera->getHeight();
+    int green_pixels = 0;
+
+    // Recorremos la matriz de la imagen
+    for (int x = 0; x < width; x++) {
+        for (int y = 0; y < height; y++) {
+            int r = Camera::imageGetRed(image, width, x, y);
+            int g = Camera::imageGetGreen(image, width, x, y);
+            int b = Camera::imageGetBlue(image, width, x, y);
+
+            // Filtro heurístico: El verde debe ser dominante y brillante
+            if (g > (r + 40) && g > (b + 40) && g > 80) {
+                green_pixels++;
+            }
+        }
+    }
+
+    // Si más del 2% de los píxeles de la cámara son "muy verdes", detectamos a la persona
+    float threshold = width * height * 0.02;
+    if (green_pixels > threshold) {
+        return true;
+    }
+
+    return false;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 void MyRobot::update_state() {
+    // 1. ANTES DE NADA: ¿Vemos a una persona?
+    if (_state != VICTIM_DETECTED && _state != DONE) {
+        if (look_for_green_person()) {
+            _state = VICTIM_DETECTED;
+            cout << "\n¡¡PERSONA VERDE DETECTADA!! Deteniendo el robot." << endl;
+            _left_speed = 0.0;
+            _right_speed = 0.0;
+            return; // Salimos de update_state para no hacer caso a la odometría
+        }
+    }
+
     double front = _ds_front->getValue();
     double left  = _ds_left->getValue();
     double right = _ds_right->getValue(); 
@@ -78,33 +132,25 @@ void MyRobot::update_state() {
     bool obs_left  = (left  > OBSTACLE_DIST_THRESHOLD);
     bool obs_right = (right > OBSTACLE_DIST_THRESHOLD);
 
-    // Error angular hacia la meta
     float angle_to_goal = atan2(_goal_pos.y - _y, _goal_pos.x - _x);
     float theta_err = angle_to_goal - _theta;
     
-    // Normalizar a [-PI, PI]
     while (theta_err > M_PI)  theta_err -= 2.0 * M_PI;
     while (theta_err < -M_PI) theta_err += 2.0 * M_PI;
 
     float current_dist_to_goal = get_distance_to_goal(_x, _y);
 
     if (current_dist_to_goal < 0.5f) {
-        cout << "¡Meta alcanzada!" << endl;
-        _left_speed = 0; _right_speed = 0;
+        cout << "Meta física de exploración alcanzada." << endl;
         _state = DONE;
         return;
     }
 
-    // ── NUEVA CONDICIÓN DE SALIDA (Heurística simple a petición) ──────────────
-    // Si estamos siguiendo la pared, apuntamos a la meta (error menor a 0.2 rads) 
-    // y no hay obstáculos enfrente, rompemos el seguimiento y vamos recto.
     if (_state == FOLLOW_WALL && abs(theta_err) < 0.2f && !obs_front) {
         _state = GO_TO_GOAL;
-        cout << "[FSM] → GO_TO_GOAL (Vía libre en dirección a la meta)" << endl;
     }
 
     switch (_state) {
-        // ── Apuntar a la meta ─────────────────────────────────────────────────
         case ALIGN_TO_GOAL:
             if (abs(theta_err) > 0.15) {
                 _left_speed  = (theta_err > 0) ? -MAX_SPEED*0.5 : MAX_SPEED*0.5;
@@ -114,21 +160,17 @@ void MyRobot::update_state() {
             }
             break;
 
-        // ── Avanzar a la meta ─────────────────────────────────────────────────
         case GO_TO_GOAL:
             if (obs_front) {
                 _state = FOLLOW_WALL;
-                cout << "[FSM] → FOLLOW_WALL (Obstáculo detectado)" << endl;
             } else {
                 _left_speed  = MAX_SPEED - (theta_err * 2.0);
                 _right_speed = MAX_SPEED + (theta_err * 2.0);
             }
             break;
 
-        // ── Seguidor de Pared Izquierda (Lógica estable) ──────────────────────
         case FOLLOW_WALL:
             if (obs_left && !obs_front) {
-                // Caso 1: Pared a la izquierda, frente libre
                 if (left > OBSTACLE_DIST_THRESHOLD * 1.5) {
                     _left_speed  = MAX_SPEED * 0.8;
                     _right_speed = MAX_SPEED * 0.6;
@@ -138,35 +180,34 @@ void MyRobot::update_state() {
                 }
             } 
             else if (obs_left && obs_front) {
-                // Caso 2: Esquina interior -> Giro fuerte derecha
                 _left_speed  = MAX_SPEED * 0.6;
                 _right_speed = -MAX_SPEED * 0.6;
             } 
             else if (!obs_left && !obs_front) {
-                // Caso 3: Esquina exterior -> Arco izquierda para buscar pared
                 _left_speed  = MAX_SPEED * 0.3;
                 _right_speed = MAX_SPEED * 0.8;
             } 
             else if (!obs_left && obs_front) {
-                // Caso 4: Muro enfrente, nada a la izq -> Giro fuerte derecha
                 _left_speed  = MAX_SPEED * 0.6;
                 _right_speed = -MAX_SPEED * 0.6;
             }
             
-            // Seguridad: si rozamos por la derecha haciendo un arco exterior
             if (obs_right && (!obs_left && !obs_front)) {
                _left_speed = MAX_SPEED * 0.5;
                _right_speed = MAX_SPEED * 0.5; 
             }
             break;
 
+        case VICTIM_DETECTED:
+            _left_speed = 0.0;
+            _right_speed = 0.0;
+            break;
+            
         case DONE:
             break;
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Odometría Clásica (Pura, sin alteraciones)
 // ─────────────────────────────────────────────────────────────────────────────
 void MyRobot::compute_odometry() {
     float cur_sl = encoder_tics_to_meters(_left_wheel_sensor->getValue());
@@ -190,14 +231,12 @@ float MyRobot::encoder_tics_to_meters(float tics) {
     return tics / ENCODER_TICS_PER_RADIAN * WHEEL_RADIUS;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 float MyRobot::get_distance_to_goal(float current_x, float current_y) {
     return sqrt(pow(_goal_pos.x - current_x, 2) + pow(_goal_pos.y - current_y, 2));
 }
 
 void MyRobot::save_waypoint() {
     float dist_since_last = sqrt(pow(_x - _last_saved_x, 2) + pow(_y - _last_saved_y, 2));
-    // Guardamos solo si vamos hacia el objetivo (evitamos guardar rutas enrevesadas esquivando muros)
     if (dist_since_last > 0.5f && _state == GO_TO_GOAL) {
         Point p = {_x, _y};
         _waypoints.push_back(p);
