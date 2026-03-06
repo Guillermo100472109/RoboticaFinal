@@ -7,6 +7,6 @@ centralWidgetVisible: 1
 selectionDisabled: 0
 viewpointLocked: 0
 orthographicViewHeight: 1
-textFiles: 1 "protos/Pioneer2_final.proto" "controllers/fool_controller/fool_controller.cpp"
-renderingDevicePerspectives: Pioneer 2:camera_f;1;1;0;0
+textFiles: 2 "controllers/fool_controller/Makefile" "controllers/fool_controller/MyRobot.cpp" "controllers/fool_controller/MyRobot.h"
 renderingDevicePerspectives: Pioneer 2:camera_s;1;1;0;0
+renderingDevicePerspectives: Pioneer 2:camera_f;1;1;0;0

@@ -1,4 +1,4 @@
-#VRML_SIM R2019a utf8
+#VRML_SIM R2019b utf8
 WorldInfo {
   info [
     "The model of the Pioneer 2 robot"
@@ -8,8 +8,8 @@ WorldInfo {
   title "Pioneer 2"
 }
 Viewpoint {
-  orientation -0.5031713719198124 -0.7022936883610718 -0.50358926295994 1.7651135406140324
-  position -11.935563509676944 31.169164240483614 3.7888596501324194
+  orientation 1 0 0 4.71238898038469
+  position -7.371210883358619e-15 33.59062269729718 2.7969812047526776e-15
 }
 Background {
   skyColor [
