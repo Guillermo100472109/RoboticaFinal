@@ -7,6 +7,6 @@ centralWidgetVisible: 1
 selectionDisabled: 0
 viewpointLocked: 0
 orthographicViewHeight: 1
-textFiles: 1 "protos/Pioneer2_final.proto" "controllers/fool_controller/fool_controller.cpp"
+textFiles: 0 "protos/Pioneer2_final.proto"
 renderingDevicePerspectives: Pioneer 2:camera_f;1;1;0.177241;5.75082e-11
 renderingDevicePerspectives: Pioneer 2:camera_s;1;1;0;0

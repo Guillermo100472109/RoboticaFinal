@@ -19,9 +19,10 @@ using namespace webots;
 #define WHEEL_RADIUS            0.0825
 #define ENCODER_TICS_PER_RADIAN 1.0
 
-#define OBSTACLE_DIST_THRESHOLD 150.0 
-#define GOAL_X                  16.0  
-#define GOAL_Y                  0.0   
+#define OBSTACLE_DIST_THRESHOLD 150.0
+#define VICTIM_APPROACH_THRESHOLD 750.0  // ds_front value to stop ~0.5 m from victim (tune if needed)
+#define GOAL_X                  16.0
+#define GOAL_Y                  0.0
 
 struct Point {
     float x;
@@ -33,7 +34,10 @@ typedef enum {
     ALIGN_TO_GOAL,
     GO_TO_GOAL,
     FOLLOW_WALL,
-    VICTIM_DETECTED, // <- Nuevo estado para cuando veamos el verde
+    APPROACH_VICTIM, // <- Avanzar hacia la víctima hasta ~1 m
+    SPIN_360,        // <- Girar 360° en el sitio
+    SCAN_FOR_MORE,   // <- Buscar la segunda víctima
+    VICTIM_DETECTED, // <- Mantenido por compatibilidad
     DONE
 } State;
 
@@ -62,6 +66,11 @@ private:
 
     State  _state;
 
+    // Seguimiento de víctimas
+    int                _spin_steps;
+    int                _scan_steps;
+    std::vector<Point> _victim_positions;
+
     // Dispositivos
     PositionSensor *_left_wheel_sensor;
     PositionSensor *_right_wheel_sensor;
@@ -78,7 +87,8 @@ private:
     void   update_state();
     float  get_distance_to_goal(float current_x, float current_y);
     void   save_waypoint();
-    bool   look_for_green_person(); // <- Nueva función de visión
+    bool   look_for_green_person();
+    float  get_green_ratio();          // fracción [0,1] de píxeles verdes en la cámara
 };
 
 #endif /* MY_ROBOT_H_ */
