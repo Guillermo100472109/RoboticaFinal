@@ -19,9 +19,15 @@ MyRobot::MyRobot() : Robot() {
 
     _state = INITIAL_ALIGN;
 
-    // Seguimiento de víctimas
-    _spin_steps    = 0;
-    _scan_steps    = 0;
+    // FIX: _spin_steps solo se inicializa una vez
+    _spin_steps = 0;
+    _scan_steps = 0;
+
+    // Wall Follower Adaptativo
+    _follow_right_wall = false;  // Comenzar siguiendo muro izquierdo
+    _last_theta = 0.0f;
+    _clockwise_turns = 0;
+    _counter_clockwise_turns = 0;
 
     // Inicialización Sensores Ruedas
     _left_wheel_sensor  = getPositionSensor("left wheel sensor");
@@ -39,18 +45,17 @@ MyRobot::MyRobot() : Robot() {
 
     // Sensores Distancia
     _ds_front = getDistanceSensor("ds1");
-    _ds_left  = getDistanceSensor("ds0"); 
+    _ds_left  = getDistanceSensor("ds0");
     _ds_right = getDistanceSensor("ds3");
-
     _ds_front->enable(_time_step);
     _ds_left->enable(_time_step);
     _ds_right->enable(_time_step);
 
-    // Cámara (Asegúrate de que el nombre coincide con el del árbol de Webots)
-    _front_camera = getCamera("camera_f"); 
+    // Cámara frontal
+    _front_camera = getCamera("camera_f");
     _front_camera->enable(_time_step);
 
-    // Brújula (para obtener la orientación real del robot)
+    // Brújula
     _compass = getCompass("compass");
     _compass->enable(_time_step);
 }
@@ -62,42 +67,36 @@ MyRobot::~MyRobot() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 void MyRobot::run() {
-    // Paso inicial para que los sensores tengan datos
-    step(_time_step);
+    step(_time_step); // Paso inicial para que los sensores tengan datos
 
-    float initial_compass_rad = get_compass_heading();
-    float initial_compass_deg = initial_compass_rad * 180.0f / M_PI;
+    float initial_compass_deg = get_compass_heading() * 180.0f / M_PI;
     if (initial_compass_deg < 0.0f) initial_compass_deg += 360.0f;
 
     cout << "=================================================" << endl;
-    cout << "[DEBUG] Ángulo inicial leido (brújula): " << initial_compass_deg << "º" << endl;
-    cout << "[DEBUG] Ángulo objetivo absoluto: 270º (equivalente a -90º)" << endl;
+    cout << "[INFO] Angulo inicial (brujula): " << initial_compass_deg << "deg" << endl;
+    cout << "[INFO] Objetivo de alineacion: 270deg" << endl;
     cout << "=================================================" << endl;
-
-    cout << "Iniciando alineación... Meta de exploración -> x: " << _goal_pos.x << " y: " << _goal_pos.y << endl;
+    cout << "Iniciando alineacion... Meta -> x: " << _goal_pos.x << " y: " << _goal_pos.y << endl;
 
     Point p = {_x, _y};
     _waypoints.push_back(p);
 
+    // FIX: debug cada ~2 segundos en lugar de ~1 para reducir carga de consola
     int debug_steps = 0;
     while (step(_time_step) != -1) {
-        compute_odometry(); 
+        compute_odometry();
 
-        // Debug prints cada ~1 segundo (64ms * 15 ≈ 1s)
-        if (debug_steps++ % 15 == 0) {
-            float current_compass_rad = get_compass_heading();
-            float current_compass_deg = current_compass_rad * 180.0f / M_PI;
-            if (current_compass_deg < 0.0f) current_compass_deg += 360.0f;
-
+        // Imprimir debug cada ~2 segundos (64ms * 30 ≈ 2s)
+        if (debug_steps++ % 30 == 0) {
             float theta_deg = _theta * 180.0f / M_PI;
-            while (theta_deg < 0.0f) theta_deg += 360.0f;
+            while (theta_deg < 0.0f)    theta_deg += 360.0f;
             while (theta_deg >= 360.0f) theta_deg -= 360.0f;
-
-            cout << "[DEBUG] Pos: (" << _x << ", " << _y << ") | _theta: " << theta_deg 
-                 << "º | Brújula actual: " << current_compass_deg << "º" << endl;
+            cout << "[DEBUG] Pos: (" << _x << ", " << _y
+                 << ") | theta: " << theta_deg << "deg"
+                 << " | Estado: " << _state << endl;
         }
 
-        update_state();     
+        update_state();
 
         _left_wheel_motor->setVelocity(_left_speed);
         _right_wheel_motor->setVelocity(_right_speed);
@@ -107,47 +106,16 @@ void MyRobot::run() {
         if (_state == DONE) {
             _left_wheel_motor->setVelocity(0.0);
             _right_wheel_motor->setVelocity(0.0);
+            cout << "Mision completada." << endl;
             break;
         }
     }
 }
 
-
 // ─────────────────────────────────────────────────────────────────────────────
-// Visión Artificial: Detección de color verde
+// FIX: Fusionado look_for_green_person() y get_green_ratio() en una sola
+// función que recorre la imagen UNA sola vez. Evita doble iteración por frame.
 // ─────────────────────────────────────────────────────────────────────────────
-bool MyRobot::look_for_green_person() {
-    const unsigned char *image = _front_camera->getImage();
-    if (!image) return false;
-
-    int width = _front_camera->getWidth();
-    int height = _front_camera->getHeight();
-    int green_pixels = 0;
-
-    // Recorremos la matriz de la imagen
-    for (int x = 0; x < width; x++) {
-        for (int y = 0; y < height; y++) {
-            int r = Camera::imageGetRed(image, width, x, y);
-            int g = Camera::imageGetGreen(image, width, x, y);
-            int b = Camera::imageGetBlue(image, width, x, y);
-
-            // Filtro heurístico: El verde debe ser dominante y brillante
-            if (g > (r + 40) && g > (b + 40) && g > 80) {
-                green_pixels++;
-            }
-        }
-    }
-
-    // Si más del 2% de los píxeles de la cámara son "muy verdes", detectamos a la persona
-    float threshold = width * height * 0.02;
-    if (green_pixels > threshold) {
-        return true;
-    }
-
-    return false;
-}
-
-// Devuelve la fracción [0,1] de píxeles verdes dominantes en la imagen
 float MyRobot::get_green_ratio() {
     const unsigned char *image = _front_camera->getImage();
     if (!image) return 0.0f;
@@ -155,42 +123,49 @@ float MyRobot::get_green_ratio() {
     int width  = _front_camera->getWidth();
     int height = _front_camera->getHeight();
     int green_pixels = 0;
+    int total = width * height;
 
-    for (int x = 0; x < width; x++) {
-        for (int y = 0; y < height; y++) {
-            int r = Camera::imageGetRed(image, width, x, y);
-            int g = Camera::imageGetGreen(image, width, x, y);
-            int b = Camera::imageGetBlue(image, width, x, y);
-            if (g > (r + 40) && g > (b + 40) && g > 80)
-                green_pixels++;
-        }
+    for (int i = 0; i < total; i++) {
+        // BGRA layout en Webots: índices 0=B, 1=G, 2=R, 3=A por píxel
+        int b = image[i * 4 + 0];
+        int g = image[i * 4 + 1];
+        int r = image[i * 4 + 2];
+        if (g > (r + 40) && g > (b + 40) && g > 80)
+            green_pixels++;
     }
-    return (float)green_pixels / (float)(width * height);
+    return (float)green_pixels / (float)total;
+}
+
+bool MyRobot::look_for_green_person() {
+    // FIX: Reutiliza get_green_ratio(), no recorre la imagen dos veces
+    return get_green_ratio() > 0.02f;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 void MyRobot::update_state() {
-    // ── Detección de víctimas (solo activa tras cruzar la línea amarilla x>=16) ──
+    // ── Detección de víctimas (activa solo una vez cruzada la línea amarilla) ──
     if (_state != DONE && _state != APPROACH_VICTIM && _state != SPIN_360
         && _x >= GOAL_X) {
-        if (look_for_green_person()) {
-            // Estimar posición mundial de la víctima: robot + 2.5m en dirección de la mirada
+
+        float green = get_green_ratio(); // UNA sola llamada, resultado reutilizado
+        if (green > 0.02f) {
             const float EST_DIST = 2.5f;
             Point est_pos = {_x + EST_DIST * cosf(_theta),
                              _y + EST_DIST * sinf(_theta)};
 
-            // Ignorar si apunta hacia una víctima ya registrada (radio <2 m en espacio mundo)
             bool is_new = true;
             for (const auto& vp : _victim_positions) {
-                float d = sqrtf(powf(est_pos.x - vp.x, 2) + powf(est_pos.y - vp.y, 2));
-                if (d < 2.0f) { is_new = false; break; }
+                float dx = est_pos.x - vp.x;
+                float dy = est_pos.y - vp.y;
+                // FIX: comparar distancia^2 para evitar sqrt innecesario
+                if ((dx*dx + dy*dy) < 4.0f) { is_new = false; break; }
             }
             if (is_new) {
-                _victim_positions.push_back(est_pos);   // guardar posición estimada, no la del robot
+                _victim_positions.push_back(est_pos);
                 int n = (int)_victim_positions.size();
-                cout << "\n¡VÍCTIMA " << n << "/2 DETECTADA! Posición: ("
+                cout << "\n¡VICTIMA " << n << "/2 DETECTADA! Robot en: ("
                      << _x << ", " << _y << ")\n"
-                     << "Aproximándome..." << endl;
+                     << "Aproximandome..." << endl;
                 _left_speed  = 0.0;
                 _right_speed = 0.0;
                 _state       = APPROACH_VICTIM;
@@ -202,7 +177,7 @@ void MyRobot::update_state() {
 
     double front = _ds_front->getValue();
     double left  = _ds_left->getValue();
-    double right = _ds_right->getValue(); 
+    double right = _ds_right->getValue();
 
     bool obs_front = (front > OBSTACLE_DIST_THRESHOLD);
     bool obs_left  = (left  > OBSTACLE_DIST_THRESHOLD);
@@ -210,168 +185,251 @@ void MyRobot::update_state() {
 
     float angle_to_goal = atan2(_goal_pos.y - _y, _goal_pos.x - _x);
     float theta_err = angle_to_goal - _theta;
-    
-    while (theta_err > M_PI)  theta_err -= 2.0 * M_PI;
-    while (theta_err < -M_PI) theta_err += 2.0 * M_PI;
+    while (theta_err >  M_PI) theta_err -= 2.0f * M_PI;
+    while (theta_err < -M_PI) theta_err += 2.0f * M_PI;
 
     float current_dist_to_goal = get_distance_to_goal(_x, _y);
 
+    // ── Comprobación de llegada al objetivo ──────────────────────────────────
     if (current_dist_to_goal < 0.5f &&
         (_state == GO_TO_GOAL || _state == ALIGN_TO_GOAL || _state == FOLLOW_WALL)) {
         if ((int)_victim_positions.size() >= 2) {
-            // Regreso al inicio completado
-            cout << "Regreso al inicio completado. Misión finalizada." << endl;
+            cout << "Regreso al inicio completado. Mision finalizada." << endl;
             _state = DONE;
         } else {
-            // Zona de búsqueda alcanzada, empezar a escanear
-            cout << "Zona de búsqueda alcanzada. Iniciando exploración..." << endl;
+            cout << "Zona de busqueda alcanzada. Iniciando exploracion..." << endl;
             _state      = SCAN_FOR_MORE;
             _scan_steps = 0;
         }
         return;
     }
 
-    if (_state == FOLLOW_WALL && abs(theta_err) < 0.2f && !obs_front) {
+    // FIX: Condición de vuelta a GO_TO_GOAL más flexible:
+    // Solo requiere que no hay obstáculo frontal
+    if (_state == FOLLOW_WALL && !obs_front) {
         _state = GO_TO_GOAL;
+        _clockwise_turns = 0;
+        _counter_clockwise_turns = 0;
     }
 
     switch (_state) {
+        // ── Alineación inicial con brújula ───────────────────────────────────
         case INITIAL_ALIGN: {
-            float current_compass_deg = get_compass_heading() * 180.0f / M_PI;
-            if (current_compass_deg < 0.0f) current_compass_deg += 360.0f;
+            float deg = get_compass_heading() * 180.0f / M_PI;
+            if (deg < 0.0f) deg += 360.0f;
 
-            // Mantenemos tu lógica exacta adaptada al ciclo de Webots:
-            // Girar de forma constante (0.1, -0.1) hasta llegar a 270.
-            // Usamos un pequeño margen porque comprobar == en floats no suele funcionar con ruido.
-            if (fabsf(current_compass_deg - 270.0f) > 5.0f) {
-                _left_speed = 2.0;
+            if (fabsf(deg - 270.0f) > 5.0f) {
+                _left_speed  =  2.0;
                 _right_speed = -2.0;
             } else {
-                _left_speed = 0.0;
+                _left_speed  = 0.0;
                 _right_speed = 0.0;
-                cout << "Alineación inicial completada. Avanzando hacia el objetivo." << endl;
+                cout << "Alineacion inicial completada. Avanzando hacia el objetivo." << endl;
+                // Resetear odometría en posición y ángulo conocidos
                 _theta = 0.0f;
-                _x = 0.0f;
-                _y = 0.0f;
+                _x     = 0.0f;
+                _y     = 0.0f;
                 _state = GO_TO_GOAL;
             }
             break;
         }
 
+        // ── Realineación hacia el objetivo (usado en retorno) ────────────────
         case ALIGN_TO_GOAL:
-            if (abs(theta_err) > 0.15) {
-                _left_speed  = (theta_err > 0) ? -MAX_SPEED*0.5 : MAX_SPEED*0.5;
-                _right_speed = (theta_err > 0) ? MAX_SPEED*0.5 : -MAX_SPEED*0.5;
+            if (fabsf(theta_err) > 0.15f) {
+                _left_speed  = (theta_err > 0) ? -MAX_SPEED * 0.5f :  MAX_SPEED * 0.5f;
+                _right_speed = (theta_err > 0) ?  MAX_SPEED * 0.5f : -MAX_SPEED * 0.5f;
             } else {
                 _state = GO_TO_GOAL;
             }
             break;
 
+        // ── Navegación directa al objetivo ──────────────────────────────────
         case GO_TO_GOAL:
             if (obs_front) {
                 _state = FOLLOW_WALL;
+                _clockwise_turns = 0;
+                _counter_clockwise_turns = 0;
+                _last_theta = _theta;
             } else {
-                _left_speed  = MAX_SPEED - (theta_err * 2.0);
-                _right_speed = MAX_SPEED + (theta_err * 2.0);
+                // Control proporcional de orientación
+                _left_speed  = MAX_SPEED - (theta_err * 2.0f);
+                _right_speed = MAX_SPEED + (theta_err * 2.0f);
+                // Clampear velocidades
+                if (_left_speed  > MAX_SPEED)  _left_speed  = MAX_SPEED;
+                if (_right_speed > MAX_SPEED)   _right_speed = MAX_SPEED;
+                if (_left_speed  < -MAX_SPEED)  _left_speed  = -MAX_SPEED;
+                if (_right_speed < -MAX_SPEED)  _right_speed = -MAX_SPEED;
             }
             break;
 
-        case FOLLOW_WALL:
-            if (obs_left && !obs_front) {
-                if (left > OBSTACLE_DIST_THRESHOLD * 1.5) {
-                    _left_speed  = MAX_SPEED * 0.8;
-                    _right_speed = MAX_SPEED * 0.6;
-                } else {
-                    _left_speed  = MAX_SPEED * 0.8;
-                    _right_speed = MAX_SPEED * 0.8;
+        // ── Seguimiento de pared ADAPTATIVO (izquierda o derecha) ─────────────
+        case FOLLOW_WALL: {
+            // Detectar giros usando el cambio de ángulo (derivada de theta)
+            float d_theta = _theta - _last_theta;
+            // Normalizar a [-PI, PI]
+            while (d_theta >  M_PI) d_theta -= 2.0f * M_PI;
+            while (d_theta < -M_PI) d_theta += 2.0f * M_PI;
+
+            _last_theta = _theta;
+
+            // Si d_theta > 0: girando contra-reloj (izquierda)
+            // Si d_theta < 0: girando reloj (derecha)
+            const float TURN_THRESHOLD = 0.03f;  // ~1.7° de giro
+
+            if (d_theta > TURN_THRESHOLD) {
+                // Girando izquierda (CCW)
+                _counter_clockwise_turns++;
+                _clockwise_turns = 0;
+            } else if (d_theta < -TURN_THRESHOLD) {
+                // Girando derecha (CW)
+                _clockwise_turns++;
+                _counter_clockwise_turns = 0;
+            } else {
+                // No gira significativamente → resetear contadores lentamente
+                if (_clockwise_turns > 0) _clockwise_turns--;
+                if (_counter_clockwise_turns > 0) _counter_clockwise_turns--;
+            }
+
+            // ATRAPAMIENTO DETECTADO: muchos giros sostenidos en la misma dirección
+            if (_clockwise_turns > 15 && !_follow_right_wall) {
+                _follow_right_wall = true;
+                cout << "[WALL_FOLLOWER] ATRAPAMIENTO: cambiando a seguir muro DERECHO" << endl;
+                _clockwise_turns = 0;
+                _counter_clockwise_turns = 0;
+            } else if (_counter_clockwise_turns > 15 && _follow_right_wall) {
+                _follow_right_wall = false;
+                cout << "[WALL_FOLLOWER] ATRAPAMIENTO: cambiando a seguir muro IZQUIERDO" << endl;
+                _clockwise_turns = 0;
+                _counter_clockwise_turns = 0;
+            }
+
+            // ─── SEGUIMIENTO DE MURO IZQUIERDO ───────────────────────────────
+            if (!_follow_right_wall) {
+                if (!obs_front && obs_left) {
+                    // Mantener distancia al muro izquierdo
+                    if (left > OBSTACLE_DIST_THRESHOLD * 1.5) {
+                        // Demasiado lejos → girar suavemente a la izquierda
+                        _left_speed  = MAX_SPEED * 0.6f;
+                        _right_speed = MAX_SPEED * 0.8f;
+                    } else {
+                        // Distancia adecuada → avanzar recto
+                        _left_speed  = MAX_SPEED * 0.8f;
+                        _right_speed = MAX_SPEED * 0.8f;
+                    }
+                } else if (obs_front && obs_left) {
+                    // Muro por delante y izquierda → girar a la derecha
+                    _left_speed  =  MAX_SPEED * 0.6f;
+                    _right_speed = -MAX_SPEED * 0.6f;
+                } else if (!obs_front && !obs_left) {
+                    // Sin muro a la izquierda → girar a la izquierda para buscarlo
+                    _left_speed  = MAX_SPEED * 0.3f;
+                    _right_speed = MAX_SPEED * 0.8f;
+                } else if (obs_front && !obs_left) {
+                    // Solo obstáculo frontal → girar a la derecha
+                    _left_speed  =  MAX_SPEED * 0.6f;
+                    _right_speed = -MAX_SPEED * 0.6f;
                 }
-            } 
-            else if (obs_left && obs_front) {
-                _left_speed  = MAX_SPEED * 0.6;
-                _right_speed = -MAX_SPEED * 0.6;
-            } 
-            else if (!obs_left && !obs_front) {
-                _left_speed  = MAX_SPEED * 0.3;
-                _right_speed = MAX_SPEED * 0.8;
-            } 
-            else if (!obs_left && obs_front) {
-                _left_speed  = MAX_SPEED * 0.6;
-                _right_speed = -MAX_SPEED * 0.6;
             }
-            
-            if (obs_right && (!obs_left && !obs_front)) {
-               _left_speed = MAX_SPEED * 0.5;
-               _right_speed = MAX_SPEED * 0.5; 
+            // ─── SEGUIMIENTO DE MURO DERECHO ──────────────────────────────────
+            else {
+                if (!obs_front && obs_right) {
+                    // Mantener distancia al muro derecho
+                    if (right > OBSTACLE_DIST_THRESHOLD * 1.5) {
+                        // Demasiado lejos → girar suavemente a la derecha
+                        _left_speed  = MAX_SPEED * 0.8f;
+                        _right_speed = MAX_SPEED * 0.6f;
+                    } else {
+                        // Distancia adecuada → avanzar recto
+                        _left_speed  = MAX_SPEED * 0.8f;
+                        _right_speed = MAX_SPEED * 0.8f;
+                    }
+                } else if (obs_front && obs_right) {
+                    // Muro por delante y derecha → girar a la izquierda
+                    _left_speed  = -MAX_SPEED * 0.6f;
+                    _right_speed =  MAX_SPEED * 0.6f;
+                } else if (!obs_front && !obs_right) {
+                    // Sin muro a la derecha → girar a la derecha para buscarlo
+                    _left_speed  = MAX_SPEED * 0.8f;
+                    _right_speed = MAX_SPEED * 0.3f;
+                } else if (obs_front && !obs_right) {
+                    // Solo obstáculo frontal → girar a la izquierda
+                    _left_speed  = -MAX_SPEED * 0.6f;
+                    _right_speed =  MAX_SPEED * 0.6f;
+                }
             }
             break;
+        }
 
-        case VICTIM_DETECTED:  // fallback — no debería alcanzarse
-            _left_speed  = 0.0;
-            _right_speed = 0.0;
-            break;
-
+        // ── Aproximación a víctima detectada ────────────────────────────────
         case APPROACH_VICTIM:
-            _spin_steps++;   // también actúa como timeout de aproximación
-            if ( get_green_ratio() > 0.10f ||front > VICTIM_APPROACH_THRESHOLD || _spin_steps > 200) {
-                // Cerca (sensor frontal), o víctima ocupa >10% del frame (cámara), o timeout
-                cout << "Posición de inspección alcanzada. Iniciando giro 360°..." << endl;
+            _spin_steps++;
+            if (get_green_ratio() > 0.10f || front > VICTIM_APPROACH_THRESHOLD || _spin_steps > 200) {
+                cout << "Posicion de inspeccion alcanzada. Iniciando giro 360..." << endl;
                 _left_speed  = 0.0;
                 _right_speed = 0.0;
                 _state       = SPIN_360;
                 _spin_steps  = 0;
             } else {
-                // Avanzar hacia la víctima
-                _left_speed  = MAX_SPEED;
-                _right_speed = MAX_SPEED;
+                _left_speed  = MAX_SPEED * 0.4f;
+                _right_speed = MAX_SPEED * 0.4f;
             }
             break;
 
+        // ── Giro 360° para señalar la víctima ───────────────────────────────
         case SPIN_360:
             _spin_steps++;
+            // FIX: velocidad moderada (0.3) para un giro limpio de ~360°
             if (_spin_steps <= 155) {
-                // Girar en sentido antihorario (~360° a 30% velocidad)
-                _left_speed  = -MAX_SPEED;
-                _right_speed =  MAX_SPEED;
+                _left_speed  = -MAX_SPEED * 0.3f;
+                _right_speed =  MAX_SPEED * 0.3f;
             } else {
-                // Giro completado
                 _left_speed  = 0.0;
                 _right_speed = 0.0;
                 if ((int)_victim_positions.size() >= 2) {
-                    // Ambas víctimas inspeccionadas → volver al inicio
-                    cout << "\n¡Ambas víctimas inspeccionadas! Regresando a posición inicial..." << endl;
+                    cout << "\n¡Ambas victimas inspeccionadas! Regresando al inicio..." << endl;
                     _goal_pos = _start_pos;
                     _state    = ALIGN_TO_GOAL;
                 } else {
-                    // Primera completada → buscar la segunda
-                    cout << "Giro completado. Buscando segunda víctima..." << endl;
+                    cout << "Giro completado. Buscando segunda victima..." << endl;
                     _state      = SCAN_FOR_MORE;
                     _scan_steps = 0;
                 }
             }
             break;
 
+        // ── Búsqueda activa de la segunda víctima ───────────────────────────
         case SCAN_FOR_MORE:
             _scan_steps++;
-            // Fase 1 (~160 pasos ≈ 1 vuelta completa): girar a la izquierda
+            // FIX: la detección de víctimas también opera en SCAN_FOR_MORE
+            // (el bloque de detección al inicio de update_state() ya lo cubre
+            //  porque el estado no es APPROACH_VICTIM ni SPIN_360 ni DONE)
+
+            // Fase 1: girar ~360° a la izquierda para escanear el entorno
             if (_scan_steps <= 160) {
-                _left_speed  =  MAX_SPEED * 0.3;
-                _right_speed = -MAX_SPEED * 0.3;
+                _left_speed  =  MAX_SPEED * 0.3f;
+                _right_speed = -MAX_SPEED * 0.3f;
             }
-            // Fase 2 (~60 pasos): avanzar para cambiar ángulo de visión
+            // Fase 2: avanzar un poco para cambiar ángulo de visión
             else if (_scan_steps <= 220) {
-                _left_speed  = MAX_SPEED * 0.5;
-                _right_speed = MAX_SPEED * 0.5;
+                _left_speed  = MAX_SPEED * 0.5f;
+                _right_speed = MAX_SPEED * 0.5f;
             }
-            // Fase 3 (~160 pasos ≈ 1 vuelta completa): girar a la derecha
+            // Fase 3: girar ~360° a la derecha
             else if (_scan_steps <= 380) {
-                _left_speed  = -MAX_SPEED * 0.3;
-                _right_speed =  MAX_SPEED * 0.3;
+                _left_speed  = -MAX_SPEED * 0.3f;
+                _right_speed =  MAX_SPEED * 0.3f;
             }
-            // Búsqueda agotada sin resultado
+            // Búsqueda agotada: continuar navegando hacia el objetivo
             else {
-                cout << "Búsqueda agotada sin encontrar la segunda víctima." << endl;
-                _state = DONE;
+                cout << "Busqueda agotada. Continuando navegacion." << endl;
+                _state = GO_TO_GOAL;
             }
+            break;
+
+        case VICTIM_DETECTED: // fallback — no debería alcanzarse
+            _left_speed  = 0.0;
+            _right_speed = 0.0;
             break;
 
         case DONE:
@@ -393,9 +451,9 @@ void MyRobot::compute_odometry() {
     float d_s     = (d_sr + d_sl) / 2.0f;
     float d_theta = (d_sr - d_sl) / WHEELS_DISTANCE;
 
-    _x += d_s * cos(_theta + d_theta / 2.0f);
-    _y += d_s * sin(_theta + d_theta / 2.0f);
-    _theta += d_theta; 
+    _x     += d_s * cosf(_theta + d_theta / 2.0f);
+    _y     += d_s * sinf(_theta + d_theta / 2.0f);
+    _theta += d_theta;
 }
 
 float MyRobot::encoder_tics_to_meters(float tics) {
@@ -403,12 +461,16 @@ float MyRobot::encoder_tics_to_meters(float tics) {
 }
 
 float MyRobot::get_distance_to_goal(float current_x, float current_y) {
-    return sqrt(pow(_goal_pos.x - current_x, 2) + pow(_goal_pos.y - current_y, 2));
+    float dx = _goal_pos.x - current_x;
+    float dy = _goal_pos.y - current_y;
+    return sqrtf(dx*dx + dy*dy);
 }
 
 void MyRobot::save_waypoint() {
-    float dist_since_last = sqrt(pow(_x - _last_saved_x, 2) + pow(_y - _last_saved_y, 2));
-    if (dist_since_last > 0.5f && _state == GO_TO_GOAL) {
+    float dx = _x - _last_saved_x;
+    float dy = _y - _last_saved_y;
+    // FIX: comparar distancia^2 para evitar sqrt en cada ciclo
+    if ((dx*dx + dy*dy) > 0.25f && _state == GO_TO_GOAL) {
         Point p = {_x, _y};
         _waypoints.push_back(p);
         _last_saved_x = _x;
@@ -417,18 +479,10 @@ void MyRobot::save_waypoint() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Brújula: Convierte la lectura del compass al heading del robot
-// en el mismo sistema de referencia que la odometría.
-// La odometría usa: _x avanza con cos(_theta), _y avanza con sin(_theta).
-// El Pioneer 2 en este mundo avanza en la dirección -Z local.
-// El compass devuelve el vector "norte" (world +Z) en el frame local del robot.
-// ─────────────────────────────────────────────────────────────────────────────
 float MyRobot::get_compass_heading() {
     const double *values = _compass->getValues();
-    // values[0] = componente X del norte en frame local
-    // values[2] = componente Z del norte en frame local
-    // atan2(x, z) da el ángulo del norte respecto al frente del robot
-    // Como el robot avanza en -Z local, necesitamos ajustar:
-    float heading = atan2(values[0], values[2]);
+    // values[0] = X del norte en frame local
+    // values[2] = Z del norte en frame local
+    float heading = atan2f((float)values[0], (float)values[2]);
     return heading;
 }
