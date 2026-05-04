@@ -9,6 +9,7 @@
 #include <webots/PositionSensor.hpp>
 #include <webots/DistanceSensor.hpp>
 #include <webots/Camera.hpp> // <- Añadimos la librería de la cámara
+#include <webots/Compass.hpp> // <- Brújula para orientación inicial
 
 using namespace std;
 using namespace webots;
@@ -31,6 +32,7 @@ struct Point {
 
 // ── Estados de la FSM ─────────────────────────────────────────────────────────
 typedef enum {
+    INITIAL_ALIGN,
     ALIGN_TO_GOAL,
     GO_TO_GOAL,
     FOLLOW_WALL,
@@ -80,6 +82,7 @@ private:
     DistanceSensor *_ds_left;           
     DistanceSensor *_ds_right;
     Camera         *_front_camera; // <- Dispositivo de cámara
+    Compass        *_compass;      // <- Brújula para heading real
 
     // Métodos internos
     void   compute_odometry();
@@ -89,6 +92,7 @@ private:
     void   save_waypoint();
     bool   look_for_green_person();
     float  get_green_ratio();          // fracción [0,1] de píxeles verdes en la cámara
+    float  get_compass_heading();      // heading real del robot en radianes
 };
 
 #endif /* MY_ROBOT_H_ */
