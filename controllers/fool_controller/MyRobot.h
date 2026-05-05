@@ -10,6 +10,8 @@
 #include <webots/DistanceSensor.hpp>
 #include <webots/Camera.hpp> // <- Añadimos la librería de la cámara
 #include <webots/Compass.hpp> // <- Brújula para orientación inicial
+#include <webots/GPS.hpp>
+
 
 using namespace std;
 using namespace webots;
@@ -22,7 +24,7 @@ using namespace webots;
 
 #define OBSTACLE_DIST_THRESHOLD 150.0
 #define VICTIM_APPROACH_THRESHOLD 750.0  // ds_front value to stop ~0.5 m from victim (tune if needed)
-#define GOAL_X                  16.0
+#define GOAL_X                  18.0
 #define GOAL_Y                  0.0
 
 struct Point {
@@ -40,6 +42,8 @@ typedef enum {
     SPIN_360,        // <- Girar 360° en el sitio
     SCAN_FOR_MORE,   // <- Buscar la segunda víctima
     VICTIM_DETECTED, // <- Mantenido por compatibilidad
+    RETURN_TO_START, // <- Nuevo estado para volver al inicio
+    TURN_180,        // <- Girar 180° tras encontrar un callejón sin salida
     DONE
 } State;
 
@@ -73,16 +77,26 @@ private:
     int                _scan_steps;
     std::vector<Point> _victim_positions;
 
+    // Seguimiento dual de paredes
+    bool               _follow_left_wall;
+    bool               _prev_obs_front;
+    int                _front_obstacle_count;
+    int                _turn_180_steps;
+
     // Dispositivos
     PositionSensor *_left_wheel_sensor;
     PositionSensor *_right_wheel_sensor;
     Motor          *_left_wheel_motor;
     Motor          *_right_wheel_motor;
     DistanceSensor *_ds_front;
+    DistanceSensor *_ds_front_right;
     DistanceSensor *_ds_left;           
     DistanceSensor *_ds_right;
+    DistanceSensor *_ds_left_perp;
+    DistanceSensor *_ds_right_perp;
     Camera         *_front_camera; // <- Dispositivo de cámara
     Compass        *_compass;      // <- Brújula para heading real
+    GPS            *_gps;
 
     // Métodos internos
     void   compute_odometry();
@@ -93,6 +107,16 @@ private:
     bool   look_for_green_person();
     float  get_green_ratio();          // fracción [0,1] de píxeles verdes en la cámara
     float  get_compass_heading();      // heading real del robot en radianes
+
+    // Refactorización
+    Point  get_current_position();
+    float  calculate_theta_error(Point current_pos);
+    bool   is_obstacle_front();
+    bool   is_obstacle_left();
+    bool   is_obstacle_right();
+    bool   is_obstacle_left_perp();
+    bool   is_obstacle_right_perp();
+    bool   process_victim_detection();
 };
 
 #endif /* MY_ROBOT_H_ */

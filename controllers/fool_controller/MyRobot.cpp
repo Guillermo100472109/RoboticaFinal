@@ -23,6 +23,12 @@ MyRobot::MyRobot() : Robot() {
     _spin_steps    = 0;
     _scan_steps    = 0;
 
+    // Seguimiento dual de paredes
+    _follow_left_wall     = true;
+    _prev_obs_front       = false;
+    _front_obstacle_count = 0;
+    _turn_180_steps       = 0;
+
     // Inicialización Sensores Ruedas
     _left_wheel_sensor  = getPositionSensor("left wheel sensor");
     _right_wheel_sensor = getPositionSensor("right wheel sensor");
@@ -38,13 +44,19 @@ MyRobot::MyRobot() : Robot() {
     _right_wheel_motor->setVelocity(0.0);
 
     // Sensores Distancia
-    _ds_front = getDistanceSensor("ds1");
-    _ds_left  = getDistanceSensor("ds0"); 
-    _ds_right = getDistanceSensor("ds3");
+    _ds_front       = getDistanceSensor("ds0");
+    _ds_front_right = getDistanceSensor("ds15");
+    _ds_left        = getDistanceSensor("ds2"); 
+    _ds_right       = getDistanceSensor("ds13");
+    _ds_left_perp   = getDistanceSensor("ds3");
+    _ds_right_perp  = getDistanceSensor("ds12");
 
     _ds_front->enable(_time_step);
+    _ds_front_right->enable(_time_step);
     _ds_left->enable(_time_step);
     _ds_right->enable(_time_step);
+    _ds_left_perp->enable(_time_step);
+    _ds_right_perp->enable(_time_step);
 
     // Cámara (Asegúrate de que el nombre coincide con el del árbol de Webots)
     _front_camera = getCamera("camera_f"); 
@@ -53,6 +65,8 @@ MyRobot::MyRobot() : Robot() {
     // Brújula (para obtener la orientación real del robot)
     _compass = getCompass("compass");
     _compass->enable(_time_step);
+    _gps = getGPS("gps");
+    _gps->enable(_time_step);
 }
 
 MyRobot::~MyRobot() {
@@ -80,8 +94,17 @@ void MyRobot::run() {
     _waypoints.push_back(p);
 
     int debug_steps = 0;
+    bool first_step = true;
     while (step(_time_step) != -1) {
         compute_odometry(); 
+        float _x_gps = _gps->getValues()[2];
+        float _y_gps = _gps->getValues()[0];
+
+        if (first_step) {
+            _start_pos.x = _x;
+            _start_pos.y = _y;
+            first_step = false;
+        }
 
         // Debug prints cada ~1 segundo (64ms * 15 ≈ 1s)
         if (debug_steps++ % 15 == 0) {
@@ -93,7 +116,14 @@ void MyRobot::run() {
             while (theta_deg < 0.0f) theta_deg += 360.0f;
             while (theta_deg >= 360.0f) theta_deg -= 360.0f;
 
-            cout << "[DEBUG] Pos: (" << _x << ", " << _y << ") | _theta: " << theta_deg 
+            const char* state_names[] = {
+                "INITIAL_ALIGN", "ALIGN_TO_GOAL", "GO_TO_GOAL", "FOLLOW_WALL", 
+                "APPROACH_VICTIM", "SPIN_360", "SCAN_FOR_MORE", "VICTIM_DETECTED", 
+                "RETURN_TO_START", "DONE"
+            };
+            cout << "[DEBUG] State: " << state_names[_state] << " | Víctimas: " << _victim_positions.size() 
+                 << " | Pos GPS: (" << _x_gps << ", " << _y_gps 
+                 << ") | Odom: (" << _x << ", " << _y << ") | _theta: " << theta_deg 
                  << "º | Brújula actual: " << current_compass_deg << "º" << endl;
         }
 
@@ -170,51 +200,30 @@ float MyRobot::get_green_ratio() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 void MyRobot::update_state() {
-    // ── Detección de víctimas (solo activa tras cruzar la línea amarilla x>=16) ──
-    if (_state != DONE && _state != APPROACH_VICTIM && _state != SPIN_360
-        && _x >= GOAL_X) {
-        if (look_for_green_person()) {
-            // Estimar posición mundial de la víctima: robot + 2.5m en dirección de la mirada
-            const float EST_DIST = 2.5f;
-            Point est_pos = {_x + EST_DIST * cosf(_theta),
-                             _y + EST_DIST * sinf(_theta)};
-
-            // Ignorar si apunta hacia una víctima ya registrada (radio <2 m en espacio mundo)
-            bool is_new = true;
-            for (const auto& vp : _victim_positions) {
-                float d = sqrtf(powf(est_pos.x - vp.x, 2) + powf(est_pos.y - vp.y, 2));
-                if (d < 2.0f) { is_new = false; break; }
-            }
-            if (is_new) {
-                _victim_positions.push_back(est_pos);   // guardar posición estimada, no la del robot
-                int n = (int)_victim_positions.size();
-                cout << "\n¡VÍCTIMA " << n << "/2 DETECTADA! Posición: ("
-                     << _x << ", " << _y << ")\n"
-                     << "Aproximándome..." << endl;
-                _left_speed  = 0.0;
-                _right_speed = 0.0;
-                _state       = APPROACH_VICTIM;
-                _spin_steps  = 0;
-                return;
-            }
-        }
+    if (process_victim_detection()) {
+        return; // Salir tempranamente si se acaba de detectar una víctima
     }
 
-    double front = _ds_front->getValue();
-    double left  = _ds_left->getValue();
-    double right = _ds_right->getValue(); 
+    // Obtención de datos factorizada (usando odometría)
+    Point current_pos = get_current_position();
+    float theta_err = calculate_theta_error(current_pos);
+    float current_dist_to_goal = get_distance_to_goal(current_pos.x, current_pos.y);
 
-    bool obs_front = (front > OBSTACLE_DIST_THRESHOLD);
-    bool obs_left  = (left  > OBSTACLE_DIST_THRESHOLD);
-    bool obs_right = (right > OBSTACLE_DIST_THRESHOLD);
+    bool obs_front      = is_obstacle_front();
+    bool obs_left_diag  = is_obstacle_left();
+    bool obs_right_diag = is_obstacle_right();
+    bool obs_left_perp  = is_obstacle_left_perp();
+    bool obs_right_perp = is_obstacle_right_perp();
 
-    float angle_to_goal = atan2(_goal_pos.y - _y, _goal_pos.x - _x);
-    float theta_err = angle_to_goal - _theta;
-    
-    while (theta_err > M_PI)  theta_err -= 2.0 * M_PI;
-    while (theta_err < -M_PI) theta_err += 2.0 * M_PI;
-
-    float current_dist_to_goal = get_distance_to_goal(_x, _y);
+    // Detección de flanco de subida en el obstáculo frontal
+    if (obs_front && !_prev_obs_front) {
+        if (_state == GO_TO_GOAL) {
+            _front_obstacle_count = 1; // Primer obstáculo que nos mete en FOLLOW_WALL
+        } else if (_state == FOLLOW_WALL) {
+            _front_obstacle_count++;   // Siguiente obstáculo frontal (esquina/callejón)
+        }
+    }
+    _prev_obs_front = obs_front;
 
     if (current_dist_to_goal < 0.5f &&
         (_state == GO_TO_GOAL || _state == ALIGN_TO_GOAL || _state == FOLLOW_WALL)) {
@@ -233,6 +242,15 @@ void MyRobot::update_state() {
 
     if (_state == FOLLOW_WALL && abs(theta_err) < 0.2f && !obs_front) {
         _state = GO_TO_GOAL;
+        _front_obstacle_count = 0; // Camino despejado
+    }
+
+    // Comprobar escape de callejón
+    if (_state == FOLLOW_WALL && _front_obstacle_count >= 2) {
+        _state = TURN_180;
+        _turn_180_steps = 0;
+        _follow_left_wall = !_follow_left_wall; // Cambiamos de lado de pared
+        _front_obstacle_count = 0;
     }
 
     switch (_state) {
@@ -277,31 +295,55 @@ void MyRobot::update_state() {
             break;
 
         case FOLLOW_WALL:
-            if (obs_left && !obs_front) {
-                if (left > OBSTACLE_DIST_THRESHOLD * 1.5) {
+            if (_follow_left_wall) {
+                // Seguimiento Pared Izquierda
+                if (obs_front || obs_left_diag) {
                     _left_speed  = MAX_SPEED * 0.8;
-                    _right_speed = MAX_SPEED * 0.6;
-                } else {
-                    _left_speed  = MAX_SPEED * 0.8;
+                    _right_speed = -MAX_SPEED * 0.8;
+                } 
+                else if (obs_left_perp) {
+                    if (_ds_left_perp->getValue() > OBSTACLE_DIST_THRESHOLD * 1.5) {
+                        _left_speed  = MAX_SPEED * 0.8;
+                        _right_speed = MAX_SPEED * 0.6;
+                    } else {
+                        _left_speed  = MAX_SPEED * 0.8;
+                        _right_speed = MAX_SPEED * 0.8;
+                    }
+                } 
+                else {
+                    _left_speed  = MAX_SPEED * 0.3;
                     _right_speed = MAX_SPEED * 0.8;
                 }
-            } 
-            else if (obs_left && obs_front) {
-                _left_speed  = MAX_SPEED * 0.6;
-                _right_speed = -MAX_SPEED * 0.6;
-            } 
-            else if (!obs_left && !obs_front) {
-                _left_speed  = MAX_SPEED * 0.3;
-                _right_speed = MAX_SPEED * 0.8;
-            } 
-            else if (!obs_left && obs_front) {
-                _left_speed  = MAX_SPEED * 0.6;
-                _right_speed = -MAX_SPEED * 0.6;
+            } else {
+                // Seguimiento Pared Derecha (Lógica espejo)
+                if (obs_front || obs_right_diag) {
+                    _left_speed  = -MAX_SPEED * 0.8;
+                    _right_speed = MAX_SPEED * 0.8;
+                } 
+                else if (obs_right_perp) {
+                    if (_ds_right_perp->getValue() > OBSTACLE_DIST_THRESHOLD * 1.5) {
+                        _left_speed  = MAX_SPEED * 0.6;
+                        _right_speed = MAX_SPEED * 0.8;
+                    } else {
+                        _left_speed  = MAX_SPEED * 0.8;
+                        _right_speed = MAX_SPEED * 0.8;
+                    }
+                } 
+                else {
+                    _left_speed  = MAX_SPEED * 0.8;
+                    _right_speed = MAX_SPEED * 0.3;
+                }
             }
-            
-            if (obs_right && (!obs_left && !obs_front)) {
-               _left_speed = MAX_SPEED * 0.5;
-               _right_speed = MAX_SPEED * 0.5; 
+            break;
+
+        case TURN_180:
+            _turn_180_steps++;
+            if (_turn_180_steps < 80) { // ~180° de giro (ajustar si es necesario)
+                _left_speed  = -MAX_SPEED * 0.8;
+                _right_speed =  MAX_SPEED * 0.8;
+            } else {
+                cout << "Giro de 180 completado. Cambiando a seguir la pared " << (_follow_left_wall ? "IZQUIERDA" : "DERECHA") << endl;
+                _state = FOLLOW_WALL;
             }
             break;
 
@@ -312,7 +354,7 @@ void MyRobot::update_state() {
 
         case APPROACH_VICTIM:
             _spin_steps++;   // también actúa como timeout de aproximación
-            if ( get_green_ratio() > 0.10f ||front > VICTIM_APPROACH_THRESHOLD || _spin_steps > 200) {
+            if ( get_green_ratio() > 0.10f || _ds_front->getValue() > VICTIM_APPROACH_THRESHOLD || _ds_front_right->getValue() > VICTIM_APPROACH_THRESHOLD || _spin_steps > 200) {
                 // Cerca (sensor frontal), o víctima ocupa >10% del frame (cámara), o timeout
                 cout << "Posición de inspección alcanzada. Iniciando giro 360°..." << endl;
                 _left_speed  = 0.0;
@@ -340,7 +382,7 @@ void MyRobot::update_state() {
                     // Ambas víctimas inspeccionadas → volver al inicio
                     cout << "\n¡Ambas víctimas inspeccionadas! Regresando a posición inicial..." << endl;
                     _goal_pos = _start_pos;
-                    _state    = ALIGN_TO_GOAL;
+                    _state    = RETURN_TO_START;
                 } else {
                     // Primera completada → buscar la segunda
                     cout << "Giro completado. Buscando segunda víctima..." << endl;
@@ -371,6 +413,17 @@ void MyRobot::update_state() {
             else {
                 cout << "Búsqueda agotada sin encontrar la segunda víctima." << endl;
                 _state = DONE;
+            }
+            break;
+
+        case RETURN_TO_START:
+            // Primero se alinea perfectamente con la meta inicial
+            if (abs(theta_err) > 0.15) {
+                _left_speed  = (theta_err > 0) ? -MAX_SPEED*0.5 : MAX_SPEED*0.5;
+                _right_speed = (theta_err > 0) ? MAX_SPEED*0.5 : -MAX_SPEED*0.5;
+            } else {
+                // Luego avanza hacia ella (la lógica GO_TO_GOAL esquiva obstáculos automáticamente)
+                _state = GO_TO_GOAL;
             }
             break;
 
@@ -431,4 +484,75 @@ float MyRobot::get_compass_heading() {
     // Como el robot avanza en -Z local, necesitamos ajustar:
     float heading = atan2(values[0], values[2]);
     return heading;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Refactorización: Funciones auxiliares
+// ─────────────────────────────────────────────────────────────────────────────
+Point MyRobot::get_current_position() {
+    Point p;
+    p.x = _x;
+    p.y = _y;
+    return p;
+}
+
+float MyRobot::calculate_theta_error(Point current_pos) {
+    float angle_to_goal = atan2(_goal_pos.y - current_pos.y, _goal_pos.x - current_pos.x);
+    float theta_err = angle_to_goal - _theta;
+    
+    while (theta_err > M_PI)  theta_err -= 2.0 * M_PI;
+    while (theta_err < -M_PI) theta_err += 2.0 * M_PI;
+    return theta_err;
+}
+
+bool MyRobot::is_obstacle_front() {
+    return (_ds_front->getValue() > OBSTACLE_DIST_THRESHOLD || _ds_front_right->getValue() > OBSTACLE_DIST_THRESHOLD);
+}
+
+bool MyRobot::is_obstacle_left() {
+    return (_ds_left->getValue() > OBSTACLE_DIST_THRESHOLD);
+}
+
+bool MyRobot::is_obstacle_right() {
+    return (_ds_right->getValue() > OBSTACLE_DIST_THRESHOLD);
+}
+
+bool MyRobot::is_obstacle_left_perp() {
+    return (_ds_left_perp->getValue() > OBSTACLE_DIST_THRESHOLD);
+}
+
+bool MyRobot::is_obstacle_right_perp() {
+    return (_ds_right_perp->getValue() > OBSTACLE_DIST_THRESHOLD);
+}
+
+bool MyRobot::process_victim_detection() {
+    // ── Detección de víctimas (solo activa cuando el robot ha llegado a 18,0 y está en estado de búsqueda) ──
+    if (_state == SCAN_FOR_MORE && _victim_positions.size() < 2) {
+        if (look_for_green_person()) {
+            // Estimar posición mundial de la víctima: robot + 2.5m en dirección de la mirada
+            const float EST_DIST = 2.5f;
+            Point est_pos = {_x + EST_DIST * cosf(_theta),
+                             _y + EST_DIST * sinf(_theta)};
+
+            // Ignorar si apunta hacia una víctima ya registrada (radio <2 m en espacio mundo)
+            bool is_new = true;
+            for (const auto& vp : _victim_positions) {
+                float d = sqrtf(powf(est_pos.x - vp.x, 2) + powf(est_pos.y - vp.y, 2));
+                if (d < 2.0f) { is_new = false; break; }
+            }
+            if (is_new) {
+                _victim_positions.push_back(est_pos);   // guardar posición estimada, no la del robot
+                int n = (int)_victim_positions.size();
+                cout << "\n¡VÍCTIMA " << n << "/2 DETECTADA! Posición: ("
+                     << _x << ", " << _y << ")\n"
+                     << "Aproximándome..." << endl;
+                _left_speed  = 0.0;
+                _right_speed = 0.0;
+                _state       = APPROACH_VICTIM;
+                _spin_steps  = 0;
+                return true;
+            }
+        }
+    }
+    return false;
 }

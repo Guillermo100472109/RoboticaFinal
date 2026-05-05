@@ -1036,7 +1036,7 @@ DEF FLOOR Solid {
   locked TRUE
 }
 Pioneer2_final {
-  translation 0 0 -9.05
+  translation 2.99 0 -9.04522
   rotation 0 1 0 3.14
   controller "fool_controller"
   extensionSlot [
