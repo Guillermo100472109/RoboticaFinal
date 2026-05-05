@@ -17,7 +17,7 @@ MyRobot::MyRobot() : Robot() {
     _last_saved_x = _x;
     _last_saved_y = _y;
 
-    _state = INITIAL_ALIGN;
+    _state = ALIGN_TO_GOAL;
 
     // FIX: _spin_steps solo se inicializa una vez
     _spin_steps = 0;
@@ -55,7 +55,7 @@ MyRobot::MyRobot() : Robot() {
     _front_camera = getCamera("camera_f");
     _front_camera->enable(_time_step);
 
-    // Brújula
+    // Brújula (para obtener la orientación real del robot)
     _compass = getCompass("compass");
     _compass->enable(_time_step);
 }
@@ -67,36 +67,42 @@ MyRobot::~MyRobot() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 void MyRobot::run() {
-    step(_time_step); // Paso inicial para que los sensores tengan datos
+    // Paso inicial para que los sensores tengan datos
+    step(_time_step);
 
-    float initial_compass_deg = get_compass_heading() * 180.0f / M_PI;
+    float initial_compass_rad = get_compass_heading();
+    float initial_compass_deg = initial_compass_rad * 180.0f / M_PI;
     if (initial_compass_deg < 0.0f) initial_compass_deg += 360.0f;
 
     cout << "=================================================" << endl;
-    cout << "[INFO] Angulo inicial (brujula): " << initial_compass_deg << "deg" << endl;
-    cout << "[INFO] Objetivo de alineacion: 270deg" << endl;
+    cout << "[DEBUG] Ángulo inicial leido (brújula): " << initial_compass_deg << "º" << endl;
+    cout << "[DEBUG] Ángulo objetivo absoluto: 270º (equivalente a -90º)" << endl;
     cout << "=================================================" << endl;
-    cout << "Iniciando alineacion... Meta -> x: " << _goal_pos.x << " y: " << _goal_pos.y << endl;
+
+    cout << "Iniciando alineación... Meta de exploración -> x: " << _goal_pos.x << " y: " << _goal_pos.y << endl;
 
     Point p = {_x, _y};
     _waypoints.push_back(p);
 
-    // FIX: debug cada ~2 segundos en lugar de ~1 para reducir carga de consola
     int debug_steps = 0;
     while (step(_time_step) != -1) {
-        compute_odometry();
+        compute_odometry(); 
 
-        // Imprimir debug cada ~2 segundos (64ms * 30 ≈ 2s)
-        if (debug_steps++ % 30 == 0) {
+        // Debug prints cada ~1 segundo (64ms * 15 ≈ 1s)
+        if (debug_steps++ % 15 == 0) {
+            float current_compass_rad = get_compass_heading();
+            float current_compass_deg = current_compass_rad * 180.0f / M_PI;
+            if (current_compass_deg < 0.0f) current_compass_deg += 360.0f;
+
             float theta_deg = _theta * 180.0f / M_PI;
-            while (theta_deg < 0.0f)    theta_deg += 360.0f;
+            while (theta_deg < 0.0f) theta_deg += 360.0f;
             while (theta_deg >= 360.0f) theta_deg -= 360.0f;
-            cout << "[DEBUG] Pos: (" << _x << ", " << _y
-                 << ") | theta: " << theta_deg << "deg"
-                 << " | Estado: " << _state << endl;
+
+            cout << "[DEBUG] Pos: (" << _x << ", " << _y << ") | _theta: " << theta_deg 
+                 << "º | Brújula actual: " << current_compass_deg << "º" << endl;
         }
 
-        update_state();
+        update_state();     
 
         _left_wheel_motor->setVelocity(_left_speed);
         _right_wheel_motor->setVelocity(_right_speed);
@@ -213,28 +219,28 @@ void MyRobot::update_state() {
     }
 
     switch (_state) {
-        // ── Alineación inicial con brújula ───────────────────────────────────
         case INITIAL_ALIGN: {
-            float deg = get_compass_heading() * 180.0f / M_PI;
-            if (deg < 0.0f) deg += 360.0f;
+            float current_compass_deg = get_compass_heading() * 180.0f / M_PI;
+            if (current_compass_deg < 0.0f) current_compass_deg += 360.0f;
 
-            if (fabsf(deg - 270.0f) > 5.0f) {
-                _left_speed  =  2.0;
+            // Mantenemos tu lógica exacta adaptada al ciclo de Webots:
+            // Girar de forma constante (0.1, -0.1) hasta llegar a 270.
+            // Usamos un pequeño margen porque comprobar == en floats no suele funcionar con ruido.
+            if (fabsf(current_compass_deg - 270.0f) > 5.0f) {
+                _left_speed = 2.0;
                 _right_speed = -2.0;
             } else {
-                _left_speed  = 0.0;
+                _left_speed = 0.0;
                 _right_speed = 0.0;
-                cout << "Alineacion inicial completada. Avanzando hacia el objetivo." << endl;
-                // Resetear odometría en posición y ángulo conocidos
+                cout << "Alineación inicial completada. Avanzando hacia el objetivo." << endl;
                 _theta = 0.0f;
-                _x     = 0.0f;
-                _y     = 0.0f;
+                _x = 0.0f;
+                _y = 0.0f;
                 _state = GO_TO_GOAL;
             }
             break;
         }
 
-        // ── Realineación hacia el objetivo (usado en retorno) ────────────────
         case ALIGN_TO_GOAL:
             if (fabsf(theta_err) > 0.15f) {
                 _left_speed  = (theta_err > 0) ? -MAX_SPEED * 0.5f :  MAX_SPEED * 0.5f;
@@ -363,16 +369,18 @@ void MyRobot::update_state() {
 
         // ── Aproximación a víctima detectada ────────────────────────────────
         case APPROACH_VICTIM:
-            _spin_steps++;
-            if (get_green_ratio() > 0.10f || front > VICTIM_APPROACH_THRESHOLD || _spin_steps > 200) {
-                cout << "Posicion de inspeccion alcanzada. Iniciando giro 360..." << endl;
+            _spin_steps++;   // también actúa como timeout de aproximación
+            if ( get_green_ratio() > 0.10f ||front > VICTIM_APPROACH_THRESHOLD || _spin_steps > 200) {
+                // Cerca (sensor frontal), o víctima ocupa >10% del frame (cámara), o timeout
+                cout << "Posición de inspección alcanzada. Iniciando giro 360°..." << endl;
                 _left_speed  = 0.0;
                 _right_speed = 0.0;
                 _state       = SPIN_360;
                 _spin_steps  = 0;
             } else {
-                _left_speed  = MAX_SPEED * 0.4f;
-                _right_speed = MAX_SPEED * 0.4f;
+                // Avanzar hacia la víctima
+                _left_speed  = MAX_SPEED;
+                _right_speed = MAX_SPEED;
             }
             break;
 
@@ -381,8 +389,9 @@ void MyRobot::update_state() {
             _spin_steps++;
             // FIX: velocidad moderada (0.3) para un giro limpio de ~360°
             if (_spin_steps <= 155) {
-                _left_speed  = -MAX_SPEED * 0.3f;
-                _right_speed =  MAX_SPEED * 0.3f;
+                // Girar en sentido antihorario (~360° a 30% velocidad)
+                _left_speed  = -MAX_SPEED;
+                _right_speed =  MAX_SPEED;
             } else {
                 _left_speed  = 0.0;
                 _right_speed = 0.0;
@@ -479,10 +488,18 @@ void MyRobot::save_waypoint() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Brújula: Convierte la lectura del compass al heading del robot
+// en el mismo sistema de referencia que la odometría.
+// La odometría usa: _x avanza con cos(_theta), _y avanza con sin(_theta).
+// El Pioneer 2 en este mundo avanza en la dirección -Z local.
+// El compass devuelve el vector "norte" (world +Z) en el frame local del robot.
+// ─────────────────────────────────────────────────────────────────────────────
 float MyRobot::get_compass_heading() {
     const double *values = _compass->getValues();
-    // values[0] = X del norte en frame local
-    // values[2] = Z del norte en frame local
-    float heading = atan2f((float)values[0], (float)values[2]);
+    // values[0] = componente X del norte en frame local
+    // values[2] = componente Z del norte en frame local
+    // atan2(x, z) da el ángulo del norte respecto al frente del robot
+    // Como el robot avanza en -Z local, necesitamos ajustar:
+    float heading = atan2(values[0], values[2]);
     return heading;
 }

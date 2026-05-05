@@ -8,8 +8,12 @@
 #include <webots/Motor.hpp>
 #include <webots/PositionSensor.hpp>
 #include <webots/DistanceSensor.hpp>
+<<<<<<< HEAD
 #include <webots/Camera.hpp>
 #include <webots/Compass.hpp>
+=======
+#include <webots/Camera.hpp> // <- Añadimos la librería de la cámara
+>>>>>>> parent of 4ff7628 (Compás incial añadido)
 
 using namespace std;
 using namespace webots;
@@ -32,7 +36,6 @@ struct Point {
 
 // ── Estados de la FSM ─────────────────────────────────────────────────────────
 typedef enum {
-    INITIAL_ALIGN,
     ALIGN_TO_GOAL,
     GO_TO_GOAL,
     FOLLOW_WALL,
@@ -87,8 +90,12 @@ private:
     DistanceSensor *_ds_front;
     DistanceSensor *_ds_left;
     DistanceSensor *_ds_right;
+<<<<<<< HEAD
     Camera         *_front_camera;
     Compass        *_compass;
+=======
+    Camera         *_front_camera; // <- Dispositivo de cámara
+>>>>>>> parent of 4ff7628 (Compás incial añadido)
 
     // Métodos internos
     void   compute_odometry();
@@ -97,8 +104,12 @@ private:
     float  get_distance_to_goal(float current_x, float current_y);
     void   save_waypoint();
     bool   look_for_green_person();
+<<<<<<< HEAD
     float  get_green_ratio();
     float  get_compass_heading();
+=======
+    float  get_green_ratio();          // fracción [0,1] de píxeles verdes en la cámara
+>>>>>>> parent of 4ff7628 (Compás incial añadido)
 };
 
 #endif /* MY_ROBOT_H_ */
