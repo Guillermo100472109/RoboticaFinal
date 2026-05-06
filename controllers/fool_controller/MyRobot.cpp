@@ -396,34 +396,35 @@ void MyRobot::update_state() {
                     _state    = RETURN_TO_START;
                 } else {
                     // Primera completada → buscar la segunda
-                    cout << "Giro completado. Buscando segunda víctima..." << endl;
+                    cout << "Giro completado. Me alejo de la víctima antes de buscar la segunda..." << endl;
                     _state      = SCAN_FOR_MORE;
                     _scan_steps = 0;
-                }
+                                    }
             }
             break;
 
         case SCAN_FOR_MORE:
             _scan_steps++;
-            // Fase 1 (~160 pasos ≈ 1 vuelta completa): girar a la izquierda
+
+            // Fase 1: giro lento para buscar visualmente
             if (_scan_steps <= 160) {
                 _left_speed  =  MAX_SPEED * 0.3;
                 _right_speed = -MAX_SPEED * 0.3;
             }
-            // Fase 2 (~60 pasos): avanzar para cambiar ángulo de visión
-            else if (_scan_steps <= 220) {
-                _left_speed  = MAX_SPEED * 0.5;
-                _right_speed = MAX_SPEED * 0.5;
+            // Fase 2: avanzar bastante para cambiar realmente de zona
+            else if (_scan_steps <= 360) {
+                _left_speed  = MAX_SPEED * 0.45;
+                _right_speed = MAX_SPEED * 0.45;
             }
-            // Fase 3 (~160 pasos ≈ 1 vuelta completa): girar a la derecha
-            else if (_scan_steps <= 380) {
+            // Fase 3: giro en sentido contrario
+            else if (_scan_steps <= 520) {
                 _left_speed  = -MAX_SPEED * 0.3;
                 _right_speed =  MAX_SPEED * 0.3;
             }
-            // Búsqueda agotada sin resultado
+            // Fase 4: si no la encuentra, NO terminar; repetir patrón
             else {
-                cout << "Búsqueda agotada sin encontrar la segunda víctima." << endl;
-                _state = DONE;
+                cout << "Búsqueda local agotada. Repitiendo patrón de exploración..." << endl;
+                _scan_steps = 0;
             }
             break;
 
