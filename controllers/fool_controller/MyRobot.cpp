@@ -117,10 +117,19 @@ void MyRobot::run() {
             while (theta_deg >= 360.0f) theta_deg -= 360.0f;
 
             const char* state_names[] = {
-                "INITIAL_ALIGN", "ALIGN_TO_GOAL", "GO_TO_GOAL", "FOLLOW_WALL", 
-                "APPROACH_VICTIM", "SPIN_360", "SCAN_FOR_MORE", "VICTIM_DETECTED", 
-                "RETURN_TO_START", "DONE"
+                "INITIAL_ALIGN",
+                "ALIGN_TO_GOAL",
+                "GO_TO_GOAL",
+                "FOLLOW_WALL",
+                "APPROACH_VICTIM",
+                "SPIN_360",
+                "SCAN_FOR_MORE",
+                "VICTIM_DETECTED",
+                "RETURN_TO_START",
+                "TURN_180",
+                "DONE"
             };
+
             cout << "[DEBUG] State: " << state_names[_state] << " | Víctimas: " << _victim_positions.size() 
                  << " | Pos GPS: (" << _x_gps << ", " << _y_gps 
                  << ") | Odom: (" << _x << ", " << _y << ") | _theta: " << theta_deg 
@@ -354,7 +363,7 @@ void MyRobot::update_state() {
 
         case APPROACH_VICTIM:
             _spin_steps++;   // también actúa como timeout de aproximación
-            if ( get_green_ratio() > 0.10f || _ds_front->getValue() > VICTIM_APPROACH_THRESHOLD || _ds_front_right->getValue() > VICTIM_APPROACH_THRESHOLD || _spin_steps > 200) {
+            if (_ds_front->getValue() > VICTIM_APPROACH_THRESHOLD ||  _ds_front_right->getValue() > VICTIM_APPROACH_THRESHOLD || _spin_steps > 260) {
                 // Cerca (sensor frontal), o víctima ocupa >10% del frame (cámara), o timeout
                 cout << "Posición de inspección alcanzada. Iniciando giro 360°..." << endl;
                 _left_speed  = 0.0;
