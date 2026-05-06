@@ -23,6 +23,9 @@ MyRobot::MyRobot() : Robot() {
     _spin_steps    = 0;
     _scan_steps    = 0;
 
+    // Odometría robusta
+    _compass_at_reset = 0.0f;
+
     // Seguimiento dual de paredes
     _follow_left_wall     = true;
     _prev_obs_front       = false;
@@ -268,6 +271,7 @@ void MyRobot::update_state() {
                 _left_speed = 0.0;
                 _right_speed = 0.0;
                 cout << "Alineación inicial completada. Avanzando hacia el objetivo." << endl;
+                _compass_at_reset = get_compass_heading(); // referencia para theta via brújula
                 _theta = 0.0f;
                 _x = 0.0f;
                 _y = 0.0f;
@@ -439,16 +443,27 @@ void MyRobot::compute_odometry() {
 
     float d_sl = cur_sl - _sl;
     float d_sr = cur_sr - _sr;
-
     _sl = cur_sl;
     _sr = cur_sr;
 
-    float d_s     = (d_sr + d_sl) / 2.0f;
-    float d_theta = (d_sr - d_sl) / WHEELS_DISTANCE;
+    // Heading desde brújula: no acumula error ni se ve afectado por patinaje
+    float compass_theta = get_compass_heading() - _compass_at_reset;
+    while (compass_theta >  M_PI) compass_theta -= 2.0f * M_PI;
+    while (compass_theta < -M_PI) compass_theta += 2.0f * M_PI;
+    _theta = compass_theta;
 
-    _x += d_s * cos(_theta + d_theta / 2.0f);
-    _y += d_s * sin(_theta + d_theta / 2.0f);
-    _theta += d_theta; 
+    // Detección de patinaje: velocidad comandada significativa pero encoder apenas se movió
+    float dt = _time_step / 1000.0f;
+    float expected_dl = _left_speed  * dt * WHEEL_RADIUS;
+    float expected_dr = _right_speed * dt * WHEEL_RADIUS;
+    const float SLIP_RATIO = 0.25f;
+    bool left_slip  = fabsf(expected_dl) > 1e-4f && fabsf(d_sl) < fabsf(expected_dl) * SLIP_RATIO;
+    bool right_slip = fabsf(expected_dr) > 1e-4f && fabsf(d_sr) < fabsf(expected_dr) * SLIP_RATIO;
+    if (left_slip && right_slip) return; // descartar integración de posición durante patinaje
+
+    float d_s = (d_sr + d_sl) / 2.0f;
+    _x += d_s * cos(_theta);
+    _y += d_s * sin(_theta);
 }
 
 float MyRobot::encoder_tics_to_meters(float tics) {

@@ -77,6 +77,9 @@ private:
     int                _scan_steps;
     std::vector<Point> _victim_positions;
 
+    // Odometría robusta
+    float              _compass_at_reset; // heading de la brújula cuando se fijó _theta=0
+
     // Seguimiento dual de paredes
     bool               _follow_left_wall;
     bool               _prev_obs_front;
