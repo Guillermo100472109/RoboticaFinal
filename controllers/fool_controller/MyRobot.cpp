@@ -549,7 +549,7 @@ bool MyRobot::process_victim_detection() {
             bool is_new = true;
             for (const auto& vp : _victim_positions) {
                 float d = sqrtf(powf(est_pos.x - vp.x, 2) + powf(est_pos.y - vp.y, 2));
-                if (d < 2.0f) { is_new = false; break; }
+                if (d < 4.0f) { is_new = false; break; }
             }
             if (is_new) {
                 _victim_positions.push_back(est_pos);   // guardar posición estimada, no la del robot
