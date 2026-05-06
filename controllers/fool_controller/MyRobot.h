@@ -23,7 +23,7 @@ using namespace webots;
 #define ENCODER_TICS_PER_RADIAN 1.0
 
 #define OBSTACLE_DIST_THRESHOLD 150.0
-#define VICTIM_APPROACH_THRESHOLD 750.0  // ds_front value to stop ~0.5 m from victim (tune if needed)
+#define VICTIM_APPROACH_THRESHOLD 150.0  // ds_front value to stop ~0.5 m from victim (tune if needed)
 #define GOAL_X                  18.0
 #define GOAL_Y                  0.0
 
@@ -76,11 +76,17 @@ private:
     int                _spin_steps;
     int                _scan_steps;
     std::vector<Point> _victim_positions;
+    Point              _pending_victim_pos;
+
+    // Alineación inicial
+    int                _align_direction;   // 1=horario, -1=antihorario, 0=sin decidir
+    float              _gps_start[3];      // posición GPS al completar la alineación
 
     // Seguimiento dual de paredes
     bool               _follow_left_wall;
     bool               _prev_obs_front;
     int                _front_obstacle_count;
+    int                _turn_duration;
     int                _turn_180_steps;
 
     // Dispositivos
@@ -105,7 +111,8 @@ private:
     float  get_distance_to_goal(float current_x, float current_y);
     void   save_waypoint();
     bool   look_for_green_person();
-    float  get_green_ratio();          // fracción [0,1] de píxeles verdes en la cámara
+    float  get_green_ratio();           // fracción [0,1] de píxeles verdes en la cámara
+    float  get_green_centroid_x();     // posición horizontal del blob verde, [-1,1] (0=centro)
     float  get_compass_heading();      // heading real del robot en radianes
 
     // Refactorización
