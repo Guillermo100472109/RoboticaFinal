@@ -361,19 +361,21 @@ void MyRobot::update_state() {
             _right_speed = 0.0;
             break;
 
-        case APPROACH_VICTIM:
-            _spin_steps++;   // también actúa como timeout de aproximación
-            if (_ds_front->getValue() > VICTIM_APPROACH_THRESHOLD ||  _ds_front_right->getValue() > VICTIM_APPROACH_THRESHOLD || _spin_steps > 260) {
-                // Cerca (sensor frontal), o víctima ocupa >10% del frame (cámara), o timeout
+       case APPROACH_VICTIM:
+            _spin_steps++;
+
+            if (_ds_front->getValue() > VICTIM_APPROACH_THRESHOLD ||
+                _ds_front_right->getValue() > VICTIM_APPROACH_THRESHOLD ||
+                _spin_steps > 260) {
+
                 cout << "Posición de inspección alcanzada. Iniciando giro 360°..." << endl;
                 _left_speed  = 0.0;
                 _right_speed = 0.0;
                 _state       = SPIN_360;
                 _spin_steps  = 0;
             } else {
-                // Avanzar hacia la víctima
-                _left_speed  = MAX_SPEED;
-                _right_speed = MAX_SPEED;
+                _left_speed  = MAX_SPEED * 0.35;
+                _right_speed = MAX_SPEED * 0.35;
             }
             break;
 
