@@ -278,7 +278,7 @@ void MyRobot::update_state() {
     }
     _prev_obs_front = obs_front;
 
-    // Zona de víctimas (viaje de ida): odometría ≥ 14 m O desplazamiento GPS máximo eje ≥ 13 m
+    // Zona de víctimas (viaje de ida): odometría ≥ GOAL_X O desplazamiento GPS máximo eje ≥ GOAL_X-2
     if ((int)_victim_positions.size() < 2 &&
         (_state == GO_TO_GOAL || _state == FOLLOW_WALL)) {
         const double* g = _gps->getValues();
@@ -286,8 +286,8 @@ void MyRobot::update_state() {
         float dy      = fabsf((float)g[1] - _gps_start[1]);
         float dz      = fabsf((float)g[2] - _gps_start[2]);
         float gps_fwd = fmaxf(fmaxf(dx, dy), dz);
-        bool odom_ok  = (_x >= 14.0f);
-        bool gps_ok   = (gps_fwd >= 13.0f);
+        bool odom_ok  = (_x >= (float)GOAL_X);
+        bool gps_ok   = (gps_fwd >= (float)(GOAL_X - 2.0));
         if (odom_ok || gps_ok) {
             cout << "Zona de búsqueda alcanzada (odom=" << _x << " m | GPS_max=" << gps_fwd << " m). Explorando..." << endl;
             _state      = SCAN_FOR_MORE;
